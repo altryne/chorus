@@ -224,6 +224,15 @@ export class ToolsetsManager {
             ),
         );
 
+        // Auto-start the skills toolset if not explicitly configured
+        // Skills toolset doesn't require external config and should auto-enable
+        const skillsToolset = this._builtInToolsets.find(
+            (t) => t.name === "skills",
+        );
+        if (skillsToolset && toolsetsConfig["skills"] === undefined) {
+            await skillsToolset.ensureStart({});
+        }
+
         // handle custom toolsets
         const removedToolsetConfigs = this._customToolsets.filter(
             (t) => !customToolsetConfigs.find((c) => c.name === t.name),

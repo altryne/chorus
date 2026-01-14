@@ -94,11 +94,16 @@ const useActiveSkillsStore = create<ActiveSkillsStore>((set, get) => ({
     },
 }));
 
+/** Empty array constant to avoid creating new references */
+const EMPTY_SKILLS: IActiveSkill[] = [];
+
 /**
  * Hook to get active skills for a specific chat.
  */
 export function useActiveSkills(chatId: string): IActiveSkill[] {
-    return useActiveSkillsStore((state) => state.getSkills(chatId));
+    return useActiveSkillsStore(
+        (state) => state.skillsByChatId[chatId] ?? EMPTY_SKILLS
+    );
 }
 
 /**

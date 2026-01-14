@@ -9,7 +9,6 @@
 import { Toolset } from "@core/chorus/Toolsets";
 import {
     executeSkill,
-    getSkillsForSystemPrompt,
     prepareScriptExecution,
     getSkillScripts,
 } from "@core/chorus/skills/SkillExecution";
@@ -167,15 +166,9 @@ ${scriptList}
             await manager.initialize();
         }
 
-        // Check if we have any skills available
-        const skills = getSkillsForSystemPrompt();
-        if (skills.length === 0) {
-            console.log(
-                "[ToolsetSkills] No auto-invocation skills available"
-            );
-        }
+        // Set status to running - this is critical for listTools() to return tools
+        this._status = { status: "running" };
 
-        // Skill toolset is always "running" once initialized
         return true;
     }
 
@@ -183,7 +176,8 @@ ${scriptList}
      * Override ensureStop - nothing to stop for skills.
      */
     override async ensureStop(): Promise<void> {
-        // No-op: Skills don't have a server to stop
+        // Set status to stopped
+        this._status = { status: "stopped" };
     }
 
     /**
