@@ -29,9 +29,10 @@ These specs enable skills to actually be used in conversations.
 | Order | Spec | Title | Priority |
 | ----- | ---- | ----- | -------- |
 | 6 | 005 | Skill Execution Engine | P0 |
-| 7 | 006 | Skill API and React Hooks | P1 |
+| 7 | 012 | Skill Script Execution | P1 |
+| 8 | 006 | Skill API and React Hooks | P1 |
 
-**Milestone**: AI can discover and use skills in conversations.
+**Milestone**: AI can discover, use skills, and run skill scripts in conversations.
 
 ---
 
@@ -41,9 +42,9 @@ These specs provide the user-facing controls.
 
 | Order | Spec | Title | Priority |
 | ----- | ---- | ----- | -------- |
-| 8 | 007 | Skills Settings UI | P1 |
-| 9 | 008 | Skill Invocation UI | P1 |
-| 10 | 009 | Skill Context Indicator | P2 |
+| 9 | 007 | Skills Settings UI | P1 |
+| 10 | 008 | Skill Invocation UI | P1 |
+| 11 | 009 | Skill Context Indicator | P2 |
 
 **Milestone**: Users can manage and invoke skills through the UI.
 
@@ -53,7 +54,7 @@ These specs provide the user-facing controls.
 
 | Order | Spec | Title | Priority |
 | ----- | ---- | ----- | -------- |
-| 11 | 011 | Sample Skills | P2 |
+| 12 | 011 | Sample Skills | P2 |
 
 **Milestone**: Feature is complete with examples.
 
@@ -88,6 +89,8 @@ The Agent Skills feature is complete when:
 5. Users can manually invoke skills with /skill-name
 6. Skill preferences persist across sessions
 7. Active skills are visually indicated in conversations
+8. AI can execute scripts from skill scripts/ directories
+9. Script execution respects interpreter whitelist and permissions
 
 ---
 

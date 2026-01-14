@@ -24,8 +24,10 @@ Define the TypeScript types and interfaces for the Agent Skills system. These ty
 
 - [ ] ISkillMetadata interface defined with all required and optional fields from spec
 - [ ] ISkill interface defined representing a loaded skill
+- [ ] ISkillScript interface defined for executable scripts
 - [ ] ISkillLocation enum/type for skill discovery locations
 - [ ] ISkillState type for tracking enable/disable status
+- [ ] ISkillSettings type for configuration persistence
 - [ ] Types exported from a central location
 - [ ] All fields properly documented with JSDoc comments
 
@@ -39,9 +41,10 @@ Define the TypeScript types and interfaces for the Agent Skills system. These ty
 | ---- | -------------------------------------------------------- | ----- |
 | FR-1 | Define ISkillMetadata matching YAML frontmatter schema   | name, description, license, compatibility, metadata, allowed-tools |
 | FR-2 | Define ISkill with metadata + content + location info    | |
-| FR-3 | Define ISkillLocation for discovery sources              | project, user, global |
-| FR-4 | Define ISkillState for enabled/disabled tracking         | |
-| FR-5 | Define ISkillSettings for persistence                    | |
+| FR-3 | Define ISkillScript for executable scripts               | name, path, interpreter |
+| FR-4 | Define ISkillLocation for discovery sources              | project, user, global |
+| FR-5 | Define ISkillState for enabled/disabled tracking         | |
+| FR-6 | Define ISkillSettings for persistence                    | Includes allowedInterpreters |
 
 ---
 
@@ -60,6 +63,15 @@ interface ISkillMetadata {
     allowedTools?: string[]; // Pre-approved tools (experimental)
 }
 
+// Executable script in a skill's scripts/ directory
+interface ISkillScript {
+    name: string;           // "deploy.sh"
+    relativePath: string;   // "scripts/deploy.sh"
+    absolutePath: string;   // "/full/path/to/skill/scripts/deploy.sh"
+    interpreter?: string;   // "bash", "python3", "node" - auto-detected from extension
+    description?: string;   // Optional description from comment/frontmatter
+}
+
 interface ISkill {
     id: string;             // Unique identifier (folder name)
     metadata: ISkillMetadata;
@@ -67,8 +79,8 @@ interface ISkill {
     location: ISkillLocation;
     filePath: string;       // Full path to SKILL.md
     folderPath: string;     // Path to skill folder
-    scripts?: string[];     // Available script files
-    references?: string[];  // Available reference files
+    scripts: ISkillScript[];    // Available executable scripts
+    references: string[];       // Available reference file paths
 }
 
 type ISkillLocation = 'project' | 'user' | 'global';
@@ -84,7 +96,21 @@ interface ISkillSettings {
     enabledSkills: Record<string, boolean>;
     invocationModes: Record<string, 'auto' | 'manual'>;
     skillDiscoveryPaths: string[];
+    allowedInterpreters: string[];  // Default: ['python3', 'bash', 'node']
+    scriptTimeout: number;          // Default: 300000 (5 minutes)
+    requireScriptApproval: boolean; // Default: true
 }
+
+// Interpreter mapping for auto-detection
+const INTERPRETER_MAP: Record<string, string> = {
+    '.py': 'python3',
+    '.sh': 'bash',
+    '.bash': 'bash',
+    '.js': 'node',
+    '.ts': 'npx ts-node',
+    '.rb': 'ruby',
+    '.pl': 'perl',
+};
 ```
 
 ---
