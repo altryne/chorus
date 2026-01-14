@@ -139,14 +139,18 @@ describe("SkillManager", () => {
             );
         });
 
-        it("should restore persisted states", async () => {
-            // Mock persisted state
+        it("should restore persisted states from versioned format", async () => {
+            // Mock persisted state in new versioned format
             mockGetStore.mockResolvedValue({
                 get: vi.fn().mockResolvedValue({
-                    "test-skill": {
-                        enabled: false,
-                        invocationMode: "manual",
-                        lastUsed: "2025-01-01T00:00:00Z",
+                    version: 1,
+                    skills: {
+                        "test-skill": {
+                            enabled: false,
+                            invocationMode: "manual",
+                            lastUsed: "2025-01-01T00:00:00Z",
+                            useCount: 5,
+                        },
                     },
                 }),
                 set: vi.fn().mockResolvedValue(undefined),
@@ -160,6 +164,54 @@ describe("SkillManager", () => {
             expect(state?.enabled).toBe(false);
             expect(state?.invocationMode).toBe("manual");
             expect(state?.lastUsed).toBe("2025-01-01T00:00:00Z");
+            expect(state?.useCount).toBe(5);
+        });
+
+        it("should migrate legacy format to versioned format", async () => {
+            const mockSet = vi.fn().mockResolvedValue(undefined);
+            const mockDelete = vi.fn().mockResolvedValue(undefined);
+            const mockSave = vi.fn().mockResolvedValue(undefined);
+
+            // Mock get to return null for skillData (new format) but return legacy format for skillStates
+            const mockGet = vi.fn().mockImplementation((key: string) => {
+                if (key === "skillData") return null;
+                if (key === "skillStates") {
+                    return {
+                        "test-skill": {
+                            enabled: false,
+                            invocationMode: "manual",
+                            lastUsed: "2025-01-01T00:00:00Z",
+                        },
+                    };
+                }
+                return null;
+            });
+
+            mockGetStore.mockResolvedValue({
+                get: mockGet,
+                set: mockSet,
+                save: mockSave,
+                delete: mockDelete,
+            } as any);
+
+            const manager = SkillManager.getInstance();
+            await manager.initialize();
+
+            // Should have migrated the data
+            expect(mockSet).toHaveBeenCalledWith(
+                "skillData",
+                expect.objectContaining({
+                    version: 1,
+                    skills: expect.objectContaining({
+                        "test-skill": expect.objectContaining({
+                            enabled: false,
+                            invocationMode: "manual",
+                            useCount: 0,
+                        }),
+                    }),
+                })
+            );
+            expect(mockDelete).toHaveBeenCalledWith("skillStates");
         });
 
         it("should default new skills to enabled with auto mode", async () => {
@@ -263,7 +315,8 @@ describe("SkillManager", () => {
             expect(manager.getSkillState("test-skill")?.enabled).toBe(false);
         });
 
-        it("should persist state on enable/disable", async () => {
+        it("should persist state on enable/disable (debounced)", async () => {
+            vi.useFakeTimers();
             const mockSet = vi.fn().mockResolvedValue(undefined);
             const mockSave = vi.fn().mockResolvedValue(undefined);
             mockGetStore.mockResolvedValue({
@@ -277,13 +330,20 @@ describe("SkillManager", () => {
 
             await manager.disableSkill("test-skill");
 
+            // Persistence is debounced, so advance timers
+            await vi.advanceTimersByTimeAsync(600);
+
             expect(mockSet).toHaveBeenCalledWith(
-                "skillStates",
+                "skillData",
                 expect.objectContaining({
-                    "test-skill": expect.objectContaining({ enabled: false }),
+                    version: 1,
+                    skills: expect.objectContaining({
+                        "test-skill": expect.objectContaining({ enabled: false }),
+                    }),
                 })
             );
             expect(mockSave).toHaveBeenCalled();
+            vi.useRealTimers();
         });
 
         it("should emit event on enable/disable", async () => {
@@ -336,11 +396,33 @@ describe("SkillManager", () => {
             const before = manager.getSkillState("test-skill")?.lastUsed;
             expect(before).toBeUndefined();
 
-            await manager.recordSkillUsage("test-skill");
+            manager.recordSkillUsage("test-skill");
 
             const after = manager.getSkillState("test-skill")?.lastUsed;
             expect(after).toBeDefined();
             expect(new Date(after!).getTime()).toBeGreaterThan(0);
+        });
+
+        it("should increment useCount", async () => {
+            const manager = SkillManager.getInstance();
+            await manager.initialize();
+
+            expect(manager.getSkillUseCount("test-skill")).toBe(0);
+
+            manager.recordSkillUsage("test-skill");
+            expect(manager.getSkillUseCount("test-skill")).toBe(1);
+
+            manager.recordSkillUsage("test-skill");
+            expect(manager.getSkillUseCount("test-skill")).toBe(2);
+        });
+    });
+
+    describe("getSkillUseCount", () => {
+        it("should return 0 for non-existent skill", async () => {
+            const manager = SkillManager.getInstance();
+            await manager.initialize();
+
+            expect(manager.getSkillUseCount("non-existent")).toBe(0);
         });
     });
 
@@ -386,6 +468,80 @@ describe("SkillManager", () => {
 
             expect(clearSkillCache).toHaveBeenCalled();
             expect(mockDiscoverSkills).toHaveBeenCalled();
+        });
+    });
+
+    describe("flushPersist", () => {
+        it("should immediately persist state", async () => {
+            const mockSet = vi.fn().mockResolvedValue(undefined);
+            const mockSave = vi.fn().mockResolvedValue(undefined);
+            mockGetStore.mockResolvedValue({
+                get: vi.fn().mockResolvedValue(null),
+                set: mockSet,
+                save: mockSave,
+            } as any);
+
+            const manager = SkillManager.getInstance();
+            await manager.initialize();
+
+            vi.clearAllMocks();
+            await manager.flushPersist();
+
+            expect(mockSet).toHaveBeenCalledWith(
+                "skillData",
+                expect.objectContaining({
+                    version: 1,
+                    skills: expect.any(Object),
+                })
+            );
+            expect(mockSave).toHaveBeenCalled();
+        });
+    });
+
+    describe("debounced persistence", () => {
+        it("should batch multiple changes", async () => {
+            vi.useFakeTimers();
+            const mockSet = vi.fn().mockResolvedValue(undefined);
+            const mockSave = vi.fn().mockResolvedValue(undefined);
+            mockGetStore.mockResolvedValue({
+                get: vi.fn().mockResolvedValue(null),
+                set: mockSet,
+                save: mockSave,
+            } as any);
+
+            const manager = SkillManager.getInstance();
+            await manager.initialize();
+            vi.clearAllMocks();
+
+            // Multiple rapid changes
+            await manager.disableSkill("test-skill");
+            await manager.setInvocationMode("another-skill", "manual");
+            manager.recordSkillUsage("test-skill");
+
+            // Before debounce fires, no persistence
+            expect(mockSet).not.toHaveBeenCalled();
+
+            // After debounce
+            await vi.advanceTimersByTimeAsync(600);
+
+            // Should only persist once with all changes
+            expect(mockSet).toHaveBeenCalledTimes(1);
+            expect(mockSet).toHaveBeenCalledWith(
+                "skillData",
+                expect.objectContaining({
+                    version: 1,
+                    skills: expect.objectContaining({
+                        "test-skill": expect.objectContaining({
+                            enabled: false,
+                            useCount: 1,
+                        }),
+                        "another-skill": expect.objectContaining({
+                            invocationMode: "manual",
+                        }),
+                    }),
+                })
+            );
+            vi.useRealTimers();
         });
     });
 });

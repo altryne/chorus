@@ -4,19 +4,45 @@
  * Central coordinator for the skill system. Handles:
  * - Skill discovery and loading
  * - State management (enabled/disabled, invocation mode)
- * - State persistence
+ * - State persistence (with debouncing)
  * - Event emission for state changes
  */
 
 import { emit } from "@tauri-apps/api/event";
 import { getStore } from "@core/infra/Store";
+import debounce from "lodash/debounce";
 import { ISkill, ISkillState } from "./SkillTypes";
 import { discoverSkills, clearSkillCache } from "./SkillDiscovery";
 
 /**
+ * Current storage schema version.
+ */
+const STORAGE_VERSION = 1;
+
+/**
+ * Per-skill storage data.
+ */
+export interface ISkillStorageEntry {
+    enabled: boolean;
+    invocationMode: "auto" | "manual";
+    lastUsed?: string;
+    useCount?: number;
+}
+
+/**
  * Storage schema for persisted skill states.
  */
-export interface ISkillStorageState {
+export interface ISkillStorageData {
+    version: number;
+    skills: {
+        [skillId: string]: ISkillStorageEntry;
+    };
+}
+
+/**
+ * Legacy storage format (pre-versioned).
+ */
+interface ILegacySkillStorageState {
     [skillId: string]: {
         enabled: boolean;
         invocationMode: "auto" | "manual";
@@ -51,8 +77,16 @@ export class SkillManager {
     /** Current project path for discovery */
     private projectPath?: string;
 
+    /** Debounced save function for performance */
+    private debouncedPersist: () => void;
+
     /** Private constructor for singleton */
-    private constructor() {}
+    private constructor() {
+        // Debounce saves to avoid excessive writes
+        this.debouncedPersist = debounce(() => {
+            void this.persistStatesImmediate();
+        }, 500);
+    }
 
     /**
      * Gets the singleton instance of SkillManager.
@@ -73,7 +107,7 @@ export class SkillManager {
         this.projectPath = projectPath;
 
         // Load persisted states first
-        const persistedStates = await this.loadPersistedStates();
+        const storageData = await this.loadStorageData();
 
         // Discover skills
         const discoveryResult = await discoverSkills(projectPath);
@@ -87,12 +121,13 @@ export class SkillManager {
             this.skills.set(skill.metadata.name, skill);
 
             // Initialize state from persisted data or defaults
-            const persisted = persistedStates[skill.metadata.name];
+            const persisted = storageData.skills[skill.metadata.name];
             const state: ISkillState = {
                 skillId: skill.metadata.name,
                 enabled: persisted?.enabled ?? true, // Default to enabled
                 invocationMode: persisted?.invocationMode ?? "auto", // Default to auto
                 lastUsed: persisted?.lastUsed,
+                useCount: persisted?.useCount ?? 0,
             };
             this.states.set(skill.metadata.name, state);
         }
@@ -182,7 +217,7 @@ export class SkillManager {
         const state = this.states.get(id);
         if (state) {
             state.enabled = true;
-            await this.persistStates();
+            this.debouncedPersist();
             await this.emitSkillsChanged();
         }
     }
@@ -194,7 +229,7 @@ export class SkillManager {
         const state = this.states.get(id);
         if (state) {
             state.enabled = false;
-            await this.persistStates();
+            this.debouncedPersist();
             await this.emitSkillsChanged();
         }
     }
@@ -206,7 +241,7 @@ export class SkillManager {
         const state = this.states.get(id);
         if (state) {
             state.enabled = !state.enabled;
-            await this.persistStates();
+            this.debouncedPersist();
             await this.emitSkillsChanged();
         }
     }
@@ -221,20 +256,29 @@ export class SkillManager {
         const state = this.states.get(id);
         if (state) {
             state.invocationMode = mode;
-            await this.persistStates();
+            this.debouncedPersist();
             await this.emitSkillsChanged();
         }
     }
 
     /**
      * Records that a skill was used.
+     * Updates lastUsed timestamp and increments useCount.
      */
-    public async recordSkillUsage(id: string): Promise<void> {
+    public recordSkillUsage(id: string): void {
         const state = this.states.get(id);
         if (state) {
             state.lastUsed = new Date().toISOString();
-            await this.persistStates();
+            state.useCount = (state.useCount ?? 0) + 1;
+            this.debouncedPersist();
         }
+    }
+
+    /**
+     * Gets the usage count for a skill.
+     */
+    public getSkillUseCount(id: string): number {
+        return this.states.get(id)?.useCount ?? 0;
     }
 
     /**
@@ -267,40 +311,97 @@ export class SkillManager {
     }
 
     /**
-     * Loads persisted skill states from storage.
+     * Loads storage data, handling migration from legacy formats.
      */
-    private async loadPersistedStates(): Promise<ISkillStorageState> {
+    private async loadStorageData(): Promise<ISkillStorageData> {
         try {
             const store = await getStore(this.storeName);
-            const states = await store.get<ISkillStorageState>("skillStates");
-            return states || {};
+
+            // Try loading new versioned format first
+            const data = await store.get<ISkillStorageData>("skillData");
+            if (data && typeof data.version === "number") {
+                return this.migrateStorageData(data);
+            }
+
+            // Try loading legacy format (pre-versioned)
+            const legacyStates =
+                await store.get<ILegacySkillStorageState>("skillStates");
+            if (legacyStates && typeof legacyStates === "object") {
+                // Migrate legacy format to new format
+                const migrated: ISkillStorageData = {
+                    version: STORAGE_VERSION,
+                    skills: {},
+                };
+                for (const [id, state] of Object.entries(legacyStates)) {
+                    migrated.skills[id] = {
+                        enabled: state.enabled,
+                        invocationMode: state.invocationMode,
+                        lastUsed: state.lastUsed,
+                        useCount: 0,
+                    };
+                }
+                // Save migrated data
+                await store.set("skillData", migrated);
+                await store.delete("skillStates"); // Remove legacy key
+                await store.save();
+                return migrated;
+            }
+
+            // No existing data
+            return { version: STORAGE_VERSION, skills: {} };
         } catch (error) {
             console.error("Failed to load skill states:", error);
-            return {};
+            return { version: STORAGE_VERSION, skills: {} };
         }
     }
 
     /**
-     * Persists current skill states to storage.
+     * Migrates storage data to current version if needed.
      */
-    private async persistStates(): Promise<void> {
+    private migrateStorageData(data: ISkillStorageData): ISkillStorageData {
+        // Handle future migrations here
+        // Currently at version 1, no migrations needed
+        if (data.version < STORAGE_VERSION) {
+            // Future: Add migration logic for version upgrades
+            data.version = STORAGE_VERSION;
+        }
+        return data;
+    }
+
+    /**
+     * Persists current skill states to storage immediately.
+     * Called by the debounced persist function.
+     */
+    private async persistStatesImmediate(): Promise<void> {
         try {
             const store = await getStore(this.storeName);
-            const storageState: ISkillStorageState = {};
+            const storageData: ISkillStorageData = {
+                version: STORAGE_VERSION,
+                skills: {},
+            };
 
             for (const [id, state] of this.states) {
-                storageState[id] = {
+                storageData.skills[id] = {
                     enabled: state.enabled,
                     invocationMode: state.invocationMode,
                     lastUsed: state.lastUsed,
+                    useCount: state.useCount,
                 };
             }
 
-            await store.set("skillStates", storageState);
+            await store.set("skillData", storageData);
             await store.save();
         } catch (error) {
             console.error("Failed to persist skill states:", error);
         }
+    }
+
+    /**
+     * Forces an immediate save of skill states.
+     * Useful for ensuring data is saved before app close.
+     */
+    public async flushPersist(): Promise<void> {
+        await this.persistStatesImmediate();
     }
 
     /**
