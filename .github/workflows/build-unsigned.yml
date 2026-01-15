@@ -1,0 +1,103 @@
+name: Build Unsigned Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v0.14.5-skills)'
+        required: true
+        default: 'v0.14.5-skills'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: Chorus-macOS-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            name: Chorus-macOS-x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          cache: true
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri app
+        run: pnpm tauri build --target ${{ matrix.target }}
+
+      - name: Find DMG
+        id: find-dmg
+        run: |
+          DMG_PATH=$(find src-tauri/target/${{ matrix.target }}/release/bundle/dmg -name "*.dmg" | head -1)
+          echo "dmg_path=$DMG_PATH" >> $GITHUB_OUTPUT
+          echo "Found DMG: $DMG_PATH"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ steps.find-dmg.outputs.dmg_path }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List artifacts
+        run: find artifacts -type f
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: "Chorus ${{ github.event.inputs.version }} (Unsigned - Agent Skills)"
+          body: |
+            ## Unofficial build with Agent Skills support
+
+            This is an unsigned build from [@altryne](https://github.com/altryne)'s fork with Agent Skills support.
+
+            **Note:** Since this is unsigned, macOS will show a security warning. To open:
+            1. Right-click the app → Open, or
+            2. Run: `xattr -cr /Applications/Chorus.app`
+
+            See [Agent Skills documentation](https://github.com/altryne/chorus/blob/main/docs/SKILLS.md) for usage.
+
+            PR: https://github.com/meltylabs/chorus/pull/57
+          draft: false
+          prerelease: true
+          files: |
+            artifacts/**/*.dmg
