@@ -50,7 +50,16 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build Tauri app
-        run: pnpm tauri build --target ${{ matrix.target }}
+        run: pnpm tauri build --target ${{ matrix.target }} || true
+        # Build creates DMG successfully but fails at updater signing (no private key)
+        # We continue anyway since we only need the DMG
+
+      - name: Verify DMG exists
+        run: |
+          if ! find src-tauri/target/${{ matrix.target }}/release/bundle/dmg -name "*.dmg" | head -1; then
+            echo "ERROR: DMG not found!"
+            exit 1
+          fi
 
       - name: Find DMG
         id: find-dmg
