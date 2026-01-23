@@ -37,8 +37,8 @@ export interface ISkillDiscoveryResult {
 /**
  * Discovery paths for each location type.
  */
-const PROJECT_SKILL_DIRS = [".chorus/skills", ".claude/skills"];
-const USER_SKILL_DIRS = [".chorus/skills", ".claude/skills"];
+const PROJECT_SKILL_DIRS = [".chorus/skills", ".claude/skills", ".agent/skills"];
+const USER_SKILL_DIRS = [".chorus/skills", ".claude/skills", ".agent/skills"];
 
 /**
  * In-memory cache for discovered skills.
@@ -67,19 +67,32 @@ async function pathExists(path: string): Promise<boolean> {
 /**
  * Lists directories in a path.
  * Returns empty array if path doesn't exist or can't be read.
+ * Follows symlinks to directories.
  */
-async function listDirectories(path: string): Promise<string[]> {
+async function listDirectories(basePath: string): Promise<string[]> {
     try {
-        if (!(await pathExists(path))) {
+        if (!(await pathExists(basePath))) {
             return [];
         }
 
-        const entries = await readDir(path);
+        const entries = await readDir(basePath);
         const dirs: string[] = [];
 
         for (const entry of entries) {
-            if (entry.isDirectory && entry.name) {
-                dirs.push(entry.name);
+            if (!entry.name) continue;
+
+            // Include directories and symlinks (symlinks might point to directories)
+            if (entry.isDirectory || entry.isSymlink) {
+                // For symlinks, verify the target exists and is accessible
+                if (entry.isSymlink) {
+                    const targetPath = await join(basePath, entry.name);
+                    // Check if the symlink target exists (readDir will work if it's a dir)
+                    if (await pathExists(targetPath)) {
+                        dirs.push(entry.name);
+                    }
+                } else {
+                    dirs.push(entry.name);
+                }
             }
         }
 
